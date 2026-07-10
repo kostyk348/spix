@@ -1,0 +1,7 @@
+*.o
+*.obj
+*.exe
+demo
+examples/demo
+*.ppm
+.DS_Store
