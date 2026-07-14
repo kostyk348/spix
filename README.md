@@ -1,5 +1,8 @@
 # spix — Single-header C99 image processing library
 
+[![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
+
+
 Fixed-point arithmetic throughout. No FPU required. Zero dependencies beyond libc.
 
 ```
@@ -39,7 +42,13 @@ Or just use the API directly:
 
 ```c
 #define SPIX_IMPLEMENTATION
+
+[![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
+
 #include "spix.h"
+
+[![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
+
 
 int main(void) {
     spix_image_t *img = spix_read_ppm("photo.ppm");
