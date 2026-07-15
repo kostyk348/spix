@@ -150,6 +150,99 @@ int spix_flip_v(spix_image_t *img);
 /** Rotate 90° clockwise. Returns new image. */
 spix_image_t *spix_rotate_90(const spix_image_t *src);
 
+/* ── Pixel access ────────────────────────────────────────── */
+
+/** Get single channel value (0=R,1=G,2=B,3=A) at (x,y). Returns -1 on error. */
+int spix_get_channel(const spix_image_t *img, int x, int y, int channel);
+
+/** Set single channel value at (x,y). Returns SPIX_OK or error. */
+int spix_set_channel(spix_image_t *img, int x, int y, int channel, uint8_t value);
+
+/* ── Histogram ───────────────────────────────────────────── */
+
+/** Compute grayscale histogram (256 bins). img is NOT modified. */
+int spix_histogram(const spix_image_t *img, uint32_t hist[256]);
+
+/** Histogram equalization (in-place, converts to grayscale first). */
+int spix_equalize(spix_image_t *img);
+
+/* ── Connected components ────────────────────────────────── */
+
+typedef struct {
+    int x, y, w, h;           /**< bounding box */
+    int area;                  /**< pixel count */
+    int cx, cy;                /**< centroid */
+    uint32_t color;            /**< representative pixel color */
+} spix_component_t;
+
+typedef struct {
+    spix_component_t *items;
+    int count;
+    int *labels;               /**< label map (width × height), owned */
+    int width, height;
+} spix_components_t;
+
+/** Free components result. */
+void spix_components_free(spix_components_t *cc);
+
+/**
+ * Find connected components on a binary image (white=foreground).
+ * tolerance: max grayscale difference to consider pixels connected (0=exact).
+ * Returns SPIX_OK on success.
+ */
+int spix_find_components(const spix_image_t *img, spix_components_t *cc, int tolerance);
+
+/** Get label at (x,y). Returns -1 if out of bounds. */
+int spix_components_label(const spix_components_t *cc, int x, int y);
+
+/** Draw component bounding boxes on image (in-place). */
+int spix_draw_boxes(spix_image_t *img, const spix_components_t *cc, spix_pixel_t color);
+
+/* ── Morphology (3×3 structuring element) ────────────────── */
+
+/** Erosion (binary image: white=foreground, in-place). */
+int spix_erode(spix_image_t *img);
+
+/** Dilation (binary image: white=foreground, in-place). */
+int spix_dilate(spix_image_t *img);
+
+/** Morphological open = erode then dilate (removes small noise). */
+int spix_open(spix_image_t *img);
+
+/** Morphological close = dilate then erode (fills small holes). */
+int spix_close(spix_image_t *img);
+
+/** Top-hat = original - open (extracts bright细节). */
+spix_image_t *spix_tophat(const spix_image_t *src);
+
+/* ── Image arithmetic ────────────────────────────────────── */
+
+/** Add two images (clamped to 0-255 per channel). Returns new image. */
+spix_image_t *spix_add(const spix_image_t *a, const spix_image_t *b);
+
+/** Subtract b from a (clamped to 0). Returns new image. */
+spix_image_t *spix_sub(const spix_image_t *a, const spix_image_t *b);
+
+/** Blend two images: dst = a*(1-alpha) + b*alpha. alpha in [0.0, 1.0]. Returns new image. */
+spix_image_t *spix_blend(const spix_image_t *a, const spix_image_t *b, float alpha);
+
+/** Invert colors (in-place). */
+int spix_invert(spix_image_t *img);
+
+/** Adjust brightness by offset (-255..+255). Returns new image. */
+spix_image_t *spix_brighten(const spix_image_t *src, int offset);
+
+/** Adjust contrast by factor (1.0=identity). Returns new image. */
+spix_image_t *spix_contrast(const spix_image_t *src, float factor);
+
+/* ── IO: BMP ─────────────────────────────────────────────── */
+
+/** Write uncompressed BMP (24-bit) to file. Returns SPIX_OK or error. */
+int spix_write_bmp(const spix_image_t *img, const char *path);
+
+/** Write uncompressed BMP to memory buffer (caller must free *out). Returns bytes written. */
+size_t spix_write_bmp_mem(const spix_image_t *img, uint8_t **out);
+
 #ifdef __cplusplus
 }
 #endif
@@ -634,6 +727,515 @@ spix_image_t *spix_rotate_90(const spix_image_t *src) {
         for (int x = 0; x < src->width; x++)
             SPIX_AT(dst, src->height - 1 - y, x) = SPIX_AT(src, x, y);
     return dst;
+}
+
+/* ── Pixel access ────────────────────────────────────────── */
+
+int spix_get_channel(const spix_image_t *img, int x, int y, int channel) {
+    if (!img || x < 0 || x >= img->width || y < 0 || y >= img->height) return -1;
+    if (channel < 0 || channel > 3) return -1;
+    spix_pixel_t p = SPIX_AT(img, x, y);
+    switch (channel) {
+        case 0: return SPIX_R(p);
+        case 1: return SPIX_G(p);
+        case 2: return SPIX_B(p);
+        case 3: return SPIX_A(p);
+    }
+    return -1;
+}
+
+int spix_set_channel(spix_image_t *img, int x, int y, int channel, uint8_t value) {
+    if (!img || x < 0 || x >= img->width || y < 0 || y >= img->height) return SPIX_ERR_SIZE;
+    if (channel < 0 || channel > 3) return SPIX_ERR_SIZE;
+    spix_pixel_t *p = &SPIX_AT(img, x, y);
+    switch (channel) {
+        case 0: *p = (*p & 0x00FFFFFF) | ((uint32_t)value << 24); break;
+        case 1: *p = (*p & 0xFF00FFFF) | ((uint32_t)value << 16); break;
+        case 2: *p = (*p & 0xFFFF00FF) | ((uint32_t)value << 8);  break;
+        case 3: *p = (*p & 0xFFFFFF00) | value;                    break;
+    }
+    return SPIX_OK;
+}
+
+/* ── Histogram ───────────────────────────────────────────── */
+
+int spix_histogram(const spix_image_t *img, uint32_t hist[256]) {
+    if (!img || !hist) return SPIX_ERR_SIZE;
+    memset(hist, 0, 256 * sizeof(uint32_t));
+    for (int y = 0; y < img->height; y++)
+        for (int x = 0; x < img->width; x++)
+            hist[SPIX_R(SPIX_AT(img, x, y))]++;
+    return SPIX_OK;
+}
+
+int spix_equalize(spix_image_t *img) {
+    if (!img) return SPIX_ERR_SIZE;
+    spix_grayscale(img);
+
+    uint32_t hist[256];
+    spix_histogram(img, hist);
+
+    int total = img->width * img->height;
+    if (total == 0) return SPIX_OK;
+
+    /* CDF */
+    uint32_t cdf[256];
+    cdf[0] = hist[0];
+    for (int i = 1; i < 256; i++) cdf[i] = cdf[i - 1] + hist[i];
+
+    /* Find min non-zero CDF */
+    uint32_t cdf_min = 0;
+    for (int i = 0; i < 256; i++) {
+        if (cdf[i] > 0) { cdf_min = cdf[i]; break; }
+    }
+
+    /* Build LUT using integer arithmetic: lut[i] = (cdf[i] - cdf_min) * 255 / (total - cdf_min) */
+    uint8_t lut[256];
+    int denom = total - cdf_min;
+    if (denom <= 0) {
+        for (int i = 0; i < 256; i++) lut[i] = (uint8_t)i;
+    } else {
+        for (int i = 0; i < 256; i++) {
+            int val = (int)((cdf[i] - cdf_min) * 255 / (uint32_t)denom);
+            lut[i] = (uint8_t)SPIX_CLAMP(val, 0, 255);
+        }
+    }
+
+    /* Apply LUT */
+    for (int y = 0; y < img->height; y++)
+        for (int x = 0; x < img->width; x++) {
+            uint8_t g = SPIX_R(SPIX_AT(img, x, y));
+            uint8_t eq = lut[g];
+            SPIX_AT(img, x, y) = SPIX_RGB(eq, eq, eq);
+        }
+    return SPIX_OK;
+}
+
+/* ── Connected components (union-find) ───────────────────── */
+
+static int _spix_uf_find(int *parent, int x) {
+    while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+}
+
+static void _spix_uf_union(int *parent, int *rank, int a, int b) {
+    a = _spix_uf_find(parent, a);
+    b = _spix_uf_find(parent, b);
+    if (a == b) return;
+    if (rank[a] < rank[b]) { int t = a; a = b; b = t; }
+    parent[b] = a;
+    if (rank[a] == rank[b]) rank[a]++;
+}
+
+void spix_components_free(spix_components_t *cc) {
+    if (!cc) return;
+    free(cc->items);
+    free(cc->labels);
+    cc->items = NULL;
+    cc->labels = NULL;
+    cc->count = 0;
+}
+
+int spix_components_label(const spix_components_t *cc, int x, int y) {
+    if (!cc || !cc->labels) return -1;
+    if (x < 0 || x >= cc->width || y < 0 || y >= cc->height) return -1;
+    return cc->labels[y * cc->width + x];
+}
+
+int spix_find_components(const spix_image_t *img, spix_components_t *cc, int tolerance) {
+    if (!img || !cc) return SPIX_ERR_SIZE;
+    memset(cc, 0, sizeof(*cc));
+
+    int w = img->width, h = img->height;
+    int n = w * h;
+    int *parent = (int *)malloc((size_t)n * sizeof(int));
+    int *rank   = (int *)calloc((size_t)n, sizeof(int));
+    if (!parent || !rank) { free(parent); free(rank); return SPIX_ERR_MEM; }
+    for (int i = 0; i < n; i++) parent[i] = i;
+
+    /* Union adjacent foreground pixels */
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint8_t g = SPIX_R(SPIX_AT(img, x, y));
+            if (g < 128) continue;  /* background */
+            int idx = y * w + x;
+
+            /* right neighbor */
+            if (x + 1 < w) {
+                uint8_t gr = SPIX_R(SPIX_AT(img, x + 1, y));
+                if (gr >= 128 && abs((int)g - (int)gr) <= tolerance)
+                    _spix_uf_union(parent, rank, idx, idx + 1);
+            }
+            /* bottom neighbor */
+            if (y + 1 < h) {
+                uint8_t gb = SPIX_R(SPIX_AT(img, x, y + 1));
+                if (gb >= 128 && abs((int)g - (int)gb) <= tolerance)
+                    _spix_uf_union(parent, rank, idx, idx + w);
+            }
+        }
+    }
+
+    /* Collect unique roots, assign labels */
+    int *root_map = (int *)calloc((size_t)n, sizeof(int));
+    int *labels   = (int *)malloc((size_t)n * sizeof(int));
+    if (!root_map || !labels) { free(parent); free(rank); free(root_map); free(labels); return SPIX_ERR_MEM; }
+
+    int unique = 0;
+    for (int i = 0; i < n; i++) {
+        labels[i] = -1;
+        if (SPIX_R(img->pixels[i]) < 128) continue;
+        int root = _spix_uf_find(parent, i);
+        /* Find or add in root_map */
+        int k;
+        for (k = 0; k < unique; k++) { if (root_map[k] == root) break; }
+        if (k == unique) root_map[unique++] = root;
+        labels[i] = k;
+    }
+
+    free(parent);
+    free(rank);
+
+    /* Compute bounding boxes and centroids */
+    spix_component_t *items = (spix_component_t *)calloc((size_t)unique, sizeof(spix_component_t));
+    if (!items) { free(root_map); free(labels); return SPIX_ERR_MEM; }
+    for (int i = 0; i < unique; i++) {
+        items[i].x = w; items[i].y = h;
+        items[i].w = 0; items[i].h = 0;
+        items[i].area = 0;
+        items[i].cx = 0; items[i].cy = 0;
+    }
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int lbl = labels[y * w + x];
+            if (lbl < 0) continue;
+            spix_component_t *c = &items[lbl];
+            if (x < c->x) c->x = x;
+            if (y < c->y) c->y = y;
+            if (x >= c->x + c->w) c->w = x - c->x + 1;
+            if (y >= c->y + c->h) c->h = y - c->y + 1;
+            c->area++;
+            c->cx += x;
+            c->cy += y;
+        }
+    }
+    for (int i = 0; i < unique; i++) {
+        if (items[i].area > 0) {
+            items[i].cx /= items[i].area;
+            items[i].cy /= items[i].area;
+        }
+        /* Find representative color (centroid pixel) */
+        int cx = SPIX_CLAMP(items[i].cx, 0, w - 1);
+        int cy = SPIX_CLAMP(items[i].cy, 0, h - 1);
+        items[i].color = SPIX_AT(img, cx, cy);
+    }
+
+    free(root_map);
+
+    cc->items  = items;
+    cc->count  = unique;
+    cc->labels = labels;
+    cc->width  = w;
+    cc->height = h;
+    return SPIX_OK;
+}
+
+int spix_draw_boxes(spix_image_t *img, const spix_components_t *cc, spix_pixel_t color) {
+    if (!img || !cc) return SPIX_ERR_SIZE;
+    for (int i = 0; i < cc->count; i++) {
+        const spix_component_t *c = &cc->items[i];
+        if (c->area < 2) continue;  /* skip single-pixel noise */
+        for (int x = c->x; x < c->x + c->w && x < img->width; x++) {
+            if (c->y < img->height) SPIX_AT(img, x, c->y) = color;
+            if (c->y + c->h - 1 < img->height) SPIX_AT(img, x, c->y + c->h - 1) = color;
+        }
+        for (int y = c->y; y < c->y + c->h && y < img->height; y++) {
+            if (c->x < img->width) SPIX_AT(img, c->x, y) = color;
+            if (c->x + c->w - 1 < img->width) SPIX_AT(img, c->x + c->w - 1, y) = color;
+        }
+    }
+    return SPIX_OK;
+}
+
+/* ── Morphology ──────────────────────────────────────────── */
+
+int spix_erode(spix_image_t *img) {
+    if (!img) return SPIX_ERR_SIZE;
+    spix_pixel_t *buf = (spix_pixel_t *)malloc((size_t)img->width * img->height * sizeof(spix_pixel_t));
+    if (!buf) return SPIX_ERR_MEM;
+
+    for (int y = 0; y < img->height; y++) {
+        for (int x = 0; x < img->width; x++) {
+            uint8_t min_v = 255;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || nx >= img->width || ny < 0 || ny >= img->height) continue;
+                    uint8_t v = SPIX_R(SPIX_AT(img, nx, ny));
+                    if (v < min_v) min_v = v;
+                }
+            }
+            buf[y * img->width + x] = (min_v >= 128) ? SPIX_WHITE : SPIX_BLACK;
+        }
+    }
+    for (int y = 0; y < img->height; y++)
+        for (int x = 0; x < img->width; x++)
+            SPIX_AT(img, x, y) = buf[y * img->width + x];
+    free(buf);
+    return SPIX_OK;
+}
+
+int spix_dilate(spix_image_t *img) {
+    if (!img) return SPIX_ERR_SIZE;
+    spix_pixel_t *buf = (spix_pixel_t *)malloc((size_t)img->width * img->height * sizeof(spix_pixel_t));
+    if (!buf) return SPIX_ERR_MEM;
+
+    for (int y = 0; y < img->height; y++) {
+        for (int x = 0; x < img->width; x++) {
+            uint8_t max_v = 0;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || nx >= img->width || ny < 0 || ny >= img->height) continue;
+                    uint8_t v = SPIX_R(SPIX_AT(img, nx, ny));
+                    if (v > max_v) max_v = v;
+                }
+            }
+            buf[y * img->width + x] = (max_v >= 128) ? SPIX_WHITE : SPIX_BLACK;
+        }
+    }
+    for (int y = 0; y < img->height; y++)
+        for (int x = 0; x < img->width; x++)
+            SPIX_AT(img, x, y) = buf[y * img->width + x];
+    free(buf);
+    return SPIX_OK;
+}
+
+int spix_open(spix_image_t *img) {
+    int r = spix_erode(img);
+    if (r == SPIX_OK) r = spix_dilate(img);
+    return r;
+}
+
+int spix_close(spix_image_t *img) {
+    int r = spix_dilate(img);
+    if (r == SPIX_OK) r = spix_erode(img);
+    return r;
+}
+
+spix_image_t *spix_tophat(const spix_image_t *src) {
+    if (!src) return NULL;
+    spix_image_t *tmp = spix_clone(src);
+    if (!tmp) return NULL;
+    spix_open(tmp);
+    /* tophat = original - open */
+    spix_image_t *result = spix_sub(src, tmp);
+    spix_free(tmp);
+    return result;
+}
+
+/* ── Image arithmetic ────────────────────────────────────── */
+
+spix_image_t *spix_add(const spix_image_t *a, const spix_image_t *b) {
+    if (!a || !b) return NULL;
+    if (a->width != b->width || a->height != b->height) return NULL;
+    spix_image_t *dst = spix_alloc(a->width, a->height);
+    if (!dst) return NULL;
+    for (int y = 0; y < a->height; y++)
+        for (int x = 0; x < a->width; x++) {
+            int r = SPIX_R(SPIX_AT(a, x, y)) + SPIX_R(SPIX_AT(b, x, y));
+            int g = SPIX_G(SPIX_AT(a, x, y)) + SPIX_G(SPIX_AT(b, x, y));
+            int b_ = SPIX_B(SPIX_AT(a, x, y)) + SPIX_B(SPIX_AT(b, x, y));
+            SPIX_AT(dst, x, y) = SPIX_RGB(
+                (uint8_t)SPIX_CLAMP(r, 0, 255),
+                (uint8_t)SPIX_CLAMP(g, 0, 255),
+                (uint8_t)SPIX_CLAMP(b_, 0, 255));
+        }
+    return dst;
+}
+
+spix_image_t *spix_sub(const spix_image_t *a, const spix_image_t *b) {
+    if (!a || !b) return NULL;
+    if (a->width != b->width || a->height != b->height) return NULL;
+    spix_image_t *dst = spix_alloc(a->width, a->height);
+    if (!dst) return NULL;
+    for (int y = 0; y < a->height; y++)
+        for (int x = 0; x < a->width; x++) {
+            int r = SPIX_R(SPIX_AT(a, x, y)) - SPIX_R(SPIX_AT(b, x, y));
+            int g = SPIX_G(SPIX_AT(a, x, y)) - SPIX_G(SPIX_AT(b, x, y));
+            int b_ = SPIX_B(SPIX_AT(a, x, y)) - SPIX_B(SPIX_AT(b, x, y));
+            SPIX_AT(dst, x, y) = SPIX_RGB(
+                (uint8_t)SPIX_CLAMP(r, 0, 255),
+                (uint8_t)SPIX_CLAMP(g, 0, 255),
+                (uint8_t)SPIX_CLAMP(b_, 0, 255));
+        }
+    return dst;
+}
+
+spix_image_t *spix_blend(const spix_image_t *a, const spix_image_t *b, float alpha) {
+    if (!a || !b) return NULL;
+    if (a->width != b->width || a->height != b->height) return NULL;
+    alpha = SPIX_CLAMP(alpha, 0.0f, 1.0f);
+    float beta = 1.0f - alpha;
+    spix_image_t *dst = spix_alloc(a->width, a->height);
+    if (!dst) return NULL;
+    for (int y = 0; y < a->height; y++)
+        for (int x = 0; x < a->width; x++) {
+            int r = (int)(SPIX_R(SPIX_AT(a, x, y)) * beta + SPIX_R(SPIX_AT(b, x, y)) * alpha);
+            int g = (int)(SPIX_G(SPIX_AT(a, x, y)) * beta + SPIX_G(SPIX_AT(b, x, y)) * alpha);
+            int b_ = (int)(SPIX_B(SPIX_AT(a, x, y)) * beta + SPIX_B(SPIX_AT(b, x, y)) * alpha);
+            SPIX_AT(dst, x, y) = SPIX_RGB(
+                (uint8_t)SPIX_CLAMP(r, 0, 255),
+                (uint8_t)SPIX_CLAMP(g, 0, 255),
+                (uint8_t)SPIX_CLAMP(b_, 0, 255));
+        }
+    return dst;
+}
+
+int spix_invert(spix_image_t *img) {
+    if (!img) return SPIX_ERR_SIZE;
+    for (int y = 0; y < img->height; y++)
+        for (int x = 0; x < img->width; x++) {
+            spix_pixel_t p = SPIX_AT(img, x, y);
+            SPIX_AT(img, x, y) = SPIX_RGBA(255 - SPIX_R(p), 255 - SPIX_G(p), 255 - SPIX_B(p), SPIX_A(p));
+        }
+    return SPIX_OK;
+}
+
+spix_image_t *spix_brighten(const spix_image_t *src, int offset) {
+    if (!src) return NULL;
+    spix_image_t *dst = spix_alloc(src->width, src->height);
+    if (!dst) return NULL;
+    for (int y = 0; y < src->height; y++)
+        for (int x = 0; x < src->width; x++) {
+            int r = SPIX_R(SPIX_AT(src, x, y)) + offset;
+            int g = SPIX_G(SPIX_AT(src, x, y)) + offset;
+            int b = SPIX_B(SPIX_AT(src, x, y)) + offset;
+            SPIX_AT(dst, x, y) = SPIX_RGB(
+                (uint8_t)SPIX_CLAMP(r, 0, 255),
+                (uint8_t)SPIX_CLAMP(g, 0, 255),
+                (uint8_t)SPIX_CLAMP(b, 0, 255));
+        }
+    return dst;
+}
+
+spix_image_t *spix_contrast(const spix_image_t *src, float factor) {
+    if (!src) return NULL;
+    spix_image_t *dst = spix_alloc(src->width, src->height);
+    if (!dst) return NULL;
+    float f = SPIX_CLAMP(factor, -10.0f, 10.0f);
+    for (int y = 0; y < src->height; y++)
+        for (int x = 0; x < src->width; x++) {
+            int r = (int)(((float)SPIX_R(SPIX_AT(src, x, y)) - 128.0f) * f + 128.0f);
+            int g = (int)(((float)SPIX_G(SPIX_AT(src, x, y)) - 128.0f) * f + 128.0f);
+            int b = (int)(((float)SPIX_B(SPIX_AT(src, x, y)) - 128.0f) * f + 128.0f);
+            SPIX_AT(dst, x, y) = SPIX_RGB(
+                (uint8_t)SPIX_CLAMP(r, 0, 255),
+                (uint8_t)SPIX_CLAMP(g, 0, 255),
+                (uint8_t)SPIX_CLAMP(b, 0, 255));
+        }
+    return dst;
+}
+
+/* ── BMP writer (24-bit uncompressed) ────────────────────── */
+
+int spix_write_bmp(const spix_image_t *img, const char *path) {
+    if (!img) return SPIX_ERR_IO;
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return SPIX_ERR_IO;
+
+    int w = img->width, h = img->height;
+    int row_bytes = w * 3;
+    int padding = (4 - (row_bytes % 4)) % 4;
+    int data_size = (row_bytes + padding) * h;
+    int file_size = 54 + data_size;
+
+    /* File header (14 bytes) */
+    uint8_t fh[14] = {0};
+    fh[0] = 'B'; fh[1] = 'M';
+    fh[2] = (uint8_t)(file_size);
+    fh[3] = (uint8_t)(file_size >> 8);
+    fh[4] = (uint8_t)(file_size >> 16);
+    fh[5] = (uint8_t)(file_size >> 24);
+    fh[10] = 54;  /* offset to pixel data */
+    fwrite(fh, 1, 14, fp);
+
+    /* Info header (40 bytes) */
+    uint8_t ih[40] = {0};
+    ih[0] = 40;                        /* header size */
+    ih[4] = (uint8_t)(w);
+    ih[5] = (uint8_t)(w >> 8);
+    ih[6] = (uint8_t)(w >> 16);
+    ih[7] = (uint8_t)(w >> 24);
+    ih[8] = (uint8_t)(h);
+    ih[9] = (uint8_t)(h >> 8);
+    ih[10] = (uint8_t)(h >> 16);
+    ih[11] = (uint8_t)(h >> 24);
+    ih[12] = 1;  /* planes */
+    ih[14] = 24; /* bits per pixel */
+    ih[20] = (uint8_t)(data_size);
+    ih[21] = (uint8_t)(data_size >> 8);
+    ih[22] = (uint8_t)(data_size >> 16);
+    ih[23] = (uint8_t)(data_size >> 24);
+    fwrite(ih, 1, 40, fp);
+
+    /* Pixel data (BGR, bottom-up) */
+    uint8_t pad[3] = {0, 0, 0};
+    for (int y = h - 1; y >= 0; y--) {
+        for (int x = 0; x < w; x++) {
+            spix_pixel_t p = SPIX_AT(img, x, y);
+            uint8_t bgr[3] = { SPIX_B(p), SPIX_G(p), SPIX_R(p) };
+            fwrite(bgr, 1, 3, fp);
+        }
+        if (padding) fwrite(pad, 1, (size_t)padding, fp);
+    }
+
+    fclose(fp);
+    return SPIX_OK;
+}
+
+size_t spix_write_bmp_mem(const spix_image_t *img, uint8_t **out) {
+    if (!img || !out) return 0;
+
+    int w = img->width, h = img->height;
+    int row_bytes = w * 3;
+    int padding = (4 - (row_bytes % 4)) % 4;
+    int data_size = (row_bytes + padding) * h;
+    int file_size = 54 + data_size;
+
+    *out = (uint8_t *)calloc(1, (size_t)file_size);
+    if (!*out) return 0;
+
+    uint8_t *p = *out;
+
+    /* File header */
+    p[0] = 'B'; p[1] = 'M';
+    p[2] = (uint8_t)(file_size); p[3] = (uint8_t)(file_size >> 8);
+    p[4] = (uint8_t)(file_size >> 16); p[5] = (uint8_t)(file_size >> 24);
+    p[10] = 54;
+
+    /* Info header */
+    p[14] = 40;
+    p[18] = (uint8_t)(w); p[19] = (uint8_t)(w >> 8);
+    p[20] = (uint8_t)(w >> 16); p[21] = (uint8_t)(w >> 24);
+    p[22] = (uint8_t)(h); p[23] = (uint8_t)(h >> 8);
+    p[24] = (uint8_t)(h >> 16); p[25] = (uint8_t)(h >> 24);
+    p[26] = 1; p[28] = 24;
+    p[34] = (uint8_t)(data_size); p[35] = (uint8_t)(data_size >> 8);
+    p[36] = (uint8_t)(data_size >> 16); p[37] = (uint8_t)(data_size >> 24);
+
+    /* Pixel data */
+    uint8_t *dp = p + 54;
+    for (int y = h - 1; y >= 0; y--) {
+        for (int x = 0; x < w; x++) {
+            spix_pixel_t px = SPIX_AT(img, x, y);
+            *dp++ = SPIX_B(px);
+            *dp++ = SPIX_G(px);
+            *dp++ = SPIX_R(px);
+        }
+        if (padding) { memset(dp, 0, (size_t)padding); dp += padding; }
+    }
+
+    return (size_t)file_size;
 }
 
 #endif /* SPIX_IMPLEMENTATION */
