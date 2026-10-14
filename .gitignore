@@ -3,5 +3,7 @@
 *.exe
 demo
 examples/demo
+tests/test_spix
+bench/bench_spix
 *.ppm
 .DS_Store

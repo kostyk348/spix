@@ -320,6 +320,7 @@ static int _spix_read_int(FILE *fp) {
     int val = 0, c;
     if (!_spix_skip_ws(fp)) return -1;
     while ((c = fgetc(fp)) != EOF && isdigit(c)) val = val * 10 + (c - '0');
+    if (c != EOF) ungetc(c, fp);   /* leave the delimiter for the next token */
     return val;
 }
 
@@ -340,8 +341,16 @@ spix_image_t *spix_read_ppm(const char *path) {
     spix_image_t *img = spix_alloc(w, h);
     if (!img) { fclose(fp); return NULL; }
 
-    int c;
-    fgetc(fp); /* consume newline after maxval */
+    /* Consume exactly the single delimiter that terminated maxval.
+       (_spix_read_int() leaves it in the stream, so no byte of pixel data —
+        which may itself be a whitespace value — is lost.) Tolerate CRLF. */
+    {
+        int c = fgetc(fp);
+        if (c == '\r') {
+            int c2 = fgetc(fp);
+            if (c2 != EOF && c2 != '\n') ungetc(c2, fp);
+        }
+    }
 
     if (magic[1] == '6') {
         for (int y = 0; y < h; y++)
@@ -418,7 +427,14 @@ spix_image_t *spix_read_ppm_mem(const uint8_t *buf, size_t len) {
     int w = 0, h = 0, maxval = 0;
     fscanf(fp, "%d %d %d", &w, &h, &maxval);
     if (w <= 0 || h <= 0 || maxval <= 0) { fclose(fp); return NULL; }
-    fgetc(fp);
+    {
+        /* exactly one delimiter after maxval, tolerating CRLF */
+        int c = fgetc(fp);
+        if (c == '\r') {
+            int c2 = fgetc(fp);
+            if (c2 != EOF && c2 != '\n') ungetc(c2, fp);
+        }
+    }
 
     spix_image_t *img = spix_alloc(w, h);
     if (!img) { fclose(fp); return NULL; }
@@ -428,13 +444,17 @@ spix_image_t *spix_read_ppm_mem(const uint8_t *buf, size_t len) {
             for (int x = 0; x < w; x++) {
                 int r = fgetc(fp), g = fgetc(fp), b = fgetc(fp);
                 if (r == EOF) { spix_free(img); fclose(fp); return NULL; }
-                SPIX_AT(img, x, y) = SPIX_RGB(r, g, b);
+                SPIX_AT(img, x, y) = SPIX_RGB(
+                    (uint8_t)(r * 255 / maxval),
+                    (uint8_t)(g * 255 / maxval),
+                    (uint8_t)(b * 255 / maxval));
             }
     } else if (magic[1] == '5') {
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
                 int v = fgetc(fp); if (v == EOF) { spix_free(img); fclose(fp); return NULL; }
-                SPIX_AT(img, x, y) = SPIX_RGB((uint8_t)v, (uint8_t)v, (uint8_t)v);
+                uint8_t g = (uint8_t)(v * 255 / maxval);
+                SPIX_AT(img, x, y) = SPIX_RGB(g, g, g);
             }
     } else { spix_free(img); fclose(fp); return NULL; }
 
@@ -513,13 +533,15 @@ spix_image_t *spix_resize_bilinear(const spix_image_t *src, int new_w, int new_h
             uint32_t p10 = SPIX_AT(src, sx, sy1);
             uint32_t p11 = SPIX_AT(src, sx1, sy1);
 
-            /* Bilinear interpolation per channel */
-            int r = ((SPIX_R(p00) * ifx + SPIX_R(p01) * fx) * ify +
-                     (SPIX_R(p10) * ifx + SPIX_R(p11) * fx) * fy) >> 32;
-            int g = ((SPIX_G(p00) * ifx + SPIX_G(p01) * fx) * ify +
-                     (SPIX_G(p10) * ifx + SPIX_G(p11) * fx) * fy) >> 32;
-            int b = ((SPIX_B(p00) * ifx + SPIX_B(p01) * fx) * ify +
-                     (SPIX_B(p10) * ifx + SPIX_B(p11) * fx) * fy) >> 32;
+            /* Bilinear interpolation per channel.
+               The accumulator must be 64-bit: the intermediate value reaches
+               (2^25 * 2^16) = 2^41, which overflows 32-bit int. */
+            int64_t r = (((int64_t)(SPIX_R(p00) * ifx + SPIX_R(p01) * fx) * ify) +
+                         ((int64_t)(SPIX_R(p10) * ifx + SPIX_R(p11) * fx) * fy)) >> 32;
+            int64_t g = (((int64_t)(SPIX_G(p00) * ifx + SPIX_G(p01) * fx) * ify) +
+                         ((int64_t)(SPIX_G(p10) * ifx + SPIX_G(p11) * fx) * fy)) >> 32;
+            int64_t b = (((int64_t)(SPIX_B(p00) * ifx + SPIX_B(p01) * fx) * ify) +
+                         ((int64_t)(SPIX_B(p10) * ifx + SPIX_B(p11) * fx) * fy)) >> 32;
 
             SPIX_AT(dst, x, y) = SPIX_RGB(
                 (uint8_t)SPIX_CLAMP(r, 0, 255),
@@ -536,6 +558,14 @@ int spix_convolve_to(const spix_image_t *src, spix_image_t *dst, const spix_kern
     if (!src || !dst || !k) return SPIX_ERR_SIZE;
     if (dst->width != src->width || dst->height != src->height) return SPIX_ERR_SIZE;
     int half = k->size / 2;
+
+    /* Output offset: kernels that sum to zero (edge detect, sobel) carry no
+       brightness of their own and are rendered on a mid-grey background, so a
+       flat region stays 128 instead of black. Kernels that preserve the level
+       (box/gauss blur, sharpen, emboss) must NOT be offset. */
+    int ksum = 0;
+    for (int i = 0; i < k->size * k->size; i++) ksum += k->data[i];
+    int offset = (ksum == 0) ? 128 : 0;
 
     for (int y = 0; y < src->height; y++) {
         for (int x = 0; x < src->width; x++) {
@@ -556,20 +586,10 @@ int spix_convolve_to(const spix_image_t *src, spix_image_t *dst, const spix_kern
             if (k->shift > 0) {
                 sum_r >>= k->shift; sum_g >>= k->shift; sum_b >>= k->shift;
             }
-            int bias = k->shift > 0 ? 0 : 128; /* bias for edge/emboss */
-            if (k == &SPIX_KERNEL_EDGE_DETECT || k == &SPIX_KERNEL_EMBOSS ||
-                k == &SPIX_KERNEL_SOBEL_H || k == &SPIX_KERNEL_SOBEL_V)
-                bias = 128;
-            /* Also check by values: if kernel sums to 0, add bias */
-            {
-                int ksum = 0;
-                for (int i = 0; i < k->size * k->size; i++) ksum += k->data[i];
-                if (ksum == 0) bias = 128;
-            }
             SPIX_AT(dst, x, y) = SPIX_RGB(
-                (uint8_t)SPIX_CLAMP(sum_r + bias - 128, 0, 255),
-                (uint8_t)SPIX_CLAMP(sum_g + bias - 128, 0, 255),
-                (uint8_t)SPIX_CLAMP(sum_b + bias - 128, 0, 255));
+                (uint8_t)SPIX_CLAMP(sum_r + offset, 0, 255),
+                (uint8_t)SPIX_CLAMP(sum_g + offset, 0, 255),
+                (uint8_t)SPIX_CLAMP(sum_b + offset, 0, 255));
         }
     }
     return SPIX_OK;
@@ -639,7 +659,10 @@ uint8_t spix_threshold_otsu(const spix_image_t *img) {
         double var = (double)w_bg * w_fg * (mean_bg - mean_fg) * (mean_bg - mean_fg);
         if (var > max_var) { max_var = var; best = (uint8_t)t; }
     }
-    return best;
+    /* Otsu's t is the last level of the dark class (dark = [0..t]); this
+       library binarizes with "value >= threshold", so hand back t+1 to keep
+       spix_threshold(img, spix_threshold_otsu(img)) consistent. */
+    return (uint8_t)(best < 255 ? best + 1 : 255);
 }
 
 /* ── Floyd-Steinberg dithering ───────────────────────────── */
@@ -900,7 +923,7 @@ int spix_find_components(const spix_image_t *img, spix_components_t *cc, int tol
     if (!items) { free(root_map); free(labels); return SPIX_ERR_MEM; }
     for (int i = 0; i < unique; i++) {
         items[i].x = w; items[i].y = h;
-        items[i].w = 0; items[i].h = 0;
+        items[i].w = -1; items[i].h = -1;   /* running max_x / max_y */
         items[i].area = 0;
         items[i].cx = 0; items[i].cy = 0;
     }
@@ -911,8 +934,8 @@ int spix_find_components(const spix_image_t *img, spix_components_t *cc, int tol
             spix_component_t *c = &items[lbl];
             if (x < c->x) c->x = x;
             if (y < c->y) c->y = y;
-            if (x >= c->x + c->w) c->w = x - c->x + 1;
-            if (y >= c->y + c->h) c->h = y - c->y + 1;
+            if (x > c->w) c->w = x;   /* running max x, converted below */
+            if (y > c->h) c->h = y;   /* running max y, converted below */
             c->area++;
             c->cx += x;
             c->cy += y;
@@ -922,6 +945,11 @@ int spix_find_components(const spix_image_t *img, spix_components_t *cc, int tol
         if (items[i].area > 0) {
             items[i].cx /= items[i].area;
             items[i].cy /= items[i].area;
+            items[i].w = items[i].w - items[i].x + 1;   /* max_x - min_x + 1 */
+            items[i].h = items[i].h - items[i].y + 1;   /* max_y - min_y + 1 */
+        } else {
+            items[i].w = 0;
+            items[i].h = 0;
         }
         /* Find representative color (centroid pixel) */
         int cx = SPIX_CLAMP(items[i].cx, 0, w - 1);
@@ -1239,3 +1267,5 @@ size_t spix_write_bmp_mem(const spix_image_t *img, uint8_t **out) {
 }
 
 #endif /* SPIX_IMPLEMENTATION */
+
+#endif /* SPIX_H */

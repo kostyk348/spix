@@ -5,4 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make
+      - name: Build demo
+        run: make
+      - name: Correctness tests
+        run: make test
