@@ -1,11 +1,20 @@
+<div align="center">
+
+<img src="docs/banner.svg" alt="spix banner" width="1000">
+
 # spix — Single-header C99 image processing library
+
+### Fixed-point arithmetic throughout. No FPU required. Zero dependencies beyond libc.
 
 [![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/kostyk348/spix?sort=semver&color=blue)](https://github.com/kostyk348/spix/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/kostyk348/spix/blob/master/LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/kostyk348/spix?branch=master)](https://github.com/kostyk348/spix/commits/master)
 
-Fixed-point arithmetic throughout. No FPU required. Zero dependencies beyond libc.
+</div>
+
+---
+
 
 ```c
 #define SPIX_IMPLEMENTATION
