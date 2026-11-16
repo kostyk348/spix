@@ -9,6 +9,7 @@
 [![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/kostyk348/spix?sort=semver&color=blue)](https://github.com/kostyk348/spix/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/kostyk348/spix/blob/master/LICENSE)
+[![C99](https://img.shields.io/badge/C-99-blue.svg)](https://en.wikipedia.org/wiki/C99)
 [![Last commit](https://img.shields.io/github/last-commit/kostyk348/spix?branch=master)](https://github.com/kostyk348/spix/commits/master)
 
 </div>
@@ -63,11 +64,7 @@ Or just use the API directly:
 ```c
 #define SPIX_IMPLEMENTATION
 
-[![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
-
 #include "spix.h"
-
-[![CI](https://github.com/kostyk348/spix/actions/workflows/ci.yml/badge.svg)](https://github.com/kostyk348/spix/actions/workflows/ci.yml)
 
 int main(void) {
     spix_image_t *img = spix_read_ppm("photo.ppm");
