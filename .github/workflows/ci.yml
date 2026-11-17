@@ -9,3 +9,15 @@ jobs:
         run: make
       - name: Correctness tests
         run: make test
+
+  cmake-tests:
+    name: CMake + CTest (portable build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure

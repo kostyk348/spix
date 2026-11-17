@@ -27,7 +27,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #define REPS        3
 #define TARGET_S    0.35
@@ -298,7 +302,13 @@ static void print_cpu(void) {
     }
     fclose(fp);
     {
+#if defined(_WIN32)
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        long n = (long)si.dwNumberOfProcessors;
+#else
         long n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
         if (n > 0) printf("cores:       %ld (benchmark is single-threaded)\n", n);
     }
 }

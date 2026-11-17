@@ -63,7 +63,8 @@ static void gen_test_pattern(const char *path) {
 
 /* ── Apply filter and save ───────────────────────────────── */
 
-static void save_filter(const spix_image_t *src, const char *name,
+#define SPIX_UNUSED_DEMO __attribute__((unused))
+SPIX_UNUSED_DEMO static void save_filter(const spix_image_t *src, const char *name,
                         spix_image_t *(*filter)(const spix_image_t *)) {
     spix_image_t *result = filter(src);
     if (!result) { printf("  FAIL: %s\n", name); return; }

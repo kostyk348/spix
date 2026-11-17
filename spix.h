@@ -612,7 +612,8 @@ int spix_grayscale(spix_image_t *img) {
             spix_pixel_t p = SPIX_AT(img, x, y);
             /* 0.299*R + 0.587*G + 0.114*B in Q16 (scaled by 1000) */
             int g = (SPIX_R(p) * 299 + SPIX_G(p) * 587 + SPIX_B(p) * 114) / 1000;
-            if (g < 0) g = 0; if (g > 255) g = 255;
+            if (g < 0) g = 0;
+            if (g > 255) g = 255;
             SPIX_AT(img, x, y) = SPIX_RGB((uint8_t)g, (uint8_t)g, (uint8_t)g);
         }
     return SPIX_OK;
@@ -680,7 +681,8 @@ int spix_dither_floyd(spix_image_t *img) {
     for (int y = 0; y < img->height; y++) {
         for (int x = 0; x < img->width; x++) {
             int old = SPIX_R(SPIX_AT(img, x, y)) + ERR(x, y);
-            if (old < 0) old = 0; if (old > 255) old = 255;
+            if (old < 0) old = 0;
+            if (old > 255) old = 255;
             int new_val = old < 128 ? 0 : 255;
             SPIX_AT(img, x, y) = new_val ? SPIX_WHITE : SPIX_BLACK;
             int error = old - new_val;

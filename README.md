@@ -51,6 +51,40 @@ spix_write_bmp(img, "output.bmp");     // save as BMP
 - **Single header**: `#define SPIX_IMPLEMENTATION` before inclusion
 - **RGBA8888**: 32-bit pixels, 8 bits per channel
 
+## Build and tests
+
+Один заголовок `spix.h`, но тесты/демо/бенчмарк удобнее собирать CMake (работает и без `make`):
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure     # 511 проверок корректности
+./build/bench_spix                             # пропускная способность
+```
+
+## Benchmarks
+
+`bench/bench_spix.c` калибруется на ~0.35 с на случай, делает три прогона и печатает
+разброс — по разбросу видно, каким цифрам верить. Замер на **Intel Core i3-1115G4 @ 3.00 GHz,
+GCC 16.1.0, `-O2`**, вход 1024×768 (0.786 Мп), мегапикселей в секунду (чтение / запись):
+
+| Операция | MP/s чтение | MP/s запись | Разброс |
+|---|---|---|---|
+| `resize_bilinear` → 512×384 | 228.9 | 57.2 | 2.7 % |
+| `resize_bilinear` → 2048×1536 | 13.4 | 53.7 | 19.4 % |
+| `resize_nn` → 2048×1536 | 24.1 | 96.6 | 81.3 % |
+| `clone + invert` | 53.6 | 53.6 | 23.8 % |
+| `brighten +40` | 45.3 | 45.3 | 59.5 % |
+| `clone + grayscale` | 46.8 | 46.8 | 71.1 % |
+| `clone + bayer dither` | 35.9 | 35.9 | 18.4 % |
+| `clone + floyd dither` | 16.0 | 16.0 | 4.2 % |
+| `convolve gauss 3×3` | 5.2 | 5.2 | 30.4 % |
+| `morphology: open (binary)` | 4.8 | 4.8 | 25.5 % |
+| `write_ppm` (диск) | 3.5 | 3.5 | 0.9 % |
+
+Читать так: разброс больше ~50 % (например `brighten`, `grayscale`) означает, что на этом
+хосте цифра шумит — такие строки не стоит цитировать как «скорость библиотеки».
+
 ## Build demo
 
 ```bash
